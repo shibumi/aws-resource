@@ -16,7 +16,9 @@ limitations under the License.
 package snapshots
 
 import (
+	"fmt"
 	"os"
+	"strings"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/jharrington22/aws-resource/pkg/arguments"
@@ -24,6 +26,12 @@ import (
 	logging "github.com/jharrington22/aws-resource/pkg/logging"
 	rprtr "github.com/jharrington22/aws-resource/pkg/reporter"
 	"github.com/spf13/cobra"
+)
+
+var (
+	snapshotId bool
+	startTime  bool
+	tags       bool
 )
 
 // Cmd represents the snapshots command
@@ -84,16 +92,31 @@ func run(cmd *cobra.Command, args []string) (err error) {
 			OwnerIds: []*string{&owner},
 		}
 
-		result, err := awsClient.DescribeSnapshots(input)
+		var snapshots []*ec2.Snapshot
+		err = awsClient.DescribeSnapshotsPages(input, func(page *ec2.DescribeSnapshotsOutput, lastPage bool) bool {
+			snapshots = append(snapshots, page.Snapshots...)
+			return page.NextToken != nil
+		})
 		if err != nil {
 			reporter.Errorf("Unable to describe snapshots %s", err)
 			return err
 		}
 
-		var snapshots []*ec2.Snapshot
-		for _, snapshot := range result.Snapshots {
-			snapshots = append(snapshots, snapshot)
+		for _, snapshot := range snapshots {
 			availableSnapshots = append(availableSnapshots, snapshot)
+			if snapshotId || startTime {
+				var detail []string
+				if snapshotId {
+					detail = append(detail, *snapshot.SnapshotId)
+				}
+				if startTime {
+					detail = append(detail, snapshot.StartTime.String())
+				}
+				if tags {
+					detail = append(detail, parseTags(snapshot.Tags)...)
+				}
+				reporter.Infof("Snapshot: %s", strings.Join(detail, ","))
+			}
 		}
 
 		if len(snapshots) > 0 {
@@ -113,4 +136,15 @@ func init() {
 	// Add global flags
 	flags := Cmd.Flags()
 	arguments.AddFlags(flags)
+	Cmd.Flags().BoolVar(&startTime, "start-time", false, "Time stamp when the snapshot was initiated")
+	Cmd.Flags().BoolVar(&snapshotId, "snapshot-id", false, "The snapshot ID")
+	Cmd.Flags().BoolVar(&tags, "tags", false, "Tags")
+}
+
+func parseTags(tags []*ec2.Tag) []string {
+	var _tags []string
+	for k, v := range _tags {
+		_tags = append(_tags, fmt.Sprintf("%s: %s", k, v))
+	}
+	return _tags
 }
